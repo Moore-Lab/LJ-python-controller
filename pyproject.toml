@@ -16,5 +16,8 @@ xsphere = [
     "paho-mqtt>=1.6",
 ]
 
-[tool.setuptools.packages.find]
-include = ["labjack_t7*"]
+[tool.setuptools]
+packages = ["labjack_t7"]
+
+[tool.setuptools.package-dir]
+"labjack_t7" = "."
