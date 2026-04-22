@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "labjack-t7-controller"
+version = "0.1.0"
+description = "LabJack T7 controller plugin for xsphere-slow-control"
+requires-python = ">=3.10"
+dependencies = [
+    "labjack-ljm",
+]
+
+[project.optional-dependencies]
+xsphere = [
+    "paho-mqtt>=1.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["labjack_t7*"]
