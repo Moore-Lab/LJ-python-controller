@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from .config import AinChannelConfig, LabjackT7Config
+from config import AinChannelConfig, LabjackT7Config
 
 log = logging.getLogger(__name__)
 

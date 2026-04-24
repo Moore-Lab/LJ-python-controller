@@ -17,7 +17,11 @@ xsphere = [
 ]
 
 [tool.setuptools]
+<<<<<<< HEAD
 packages = ["labjack_t7"]
 
 [tool.setuptools.package-dir]
 "labjack_t7" = "."
+=======
+py-modules = ["config", "device", "controller"]
+>>>>>>> 1df9c051056ee967a94987e8ece4056dafe79c95
