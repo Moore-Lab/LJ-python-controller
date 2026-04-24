@@ -55,7 +55,8 @@ from tkinter import messagebox, scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
-    from labjack_t7 import AinChannelConfig, LabjackT7Config, LabJackT7Device
+    from device import LabJackT7Device
+    from config import LabjackT7Config, AinChannelConfig
     _HAS_PKG = True
 except ImportError:
     _HAS_PKG = False
@@ -173,7 +174,7 @@ class DeviceWorker:
 
 
 # ── Tiny widget helpers ────────────────────────────────────────────────────────
-def _lbl(p, text, **kw):  return ttk.Label(p, text=text, **kw)
+def _lbl(p, text="", **kw):  return ttk.Label(p, text=text, **kw)
 def _btn(p, text, cmd, **kw): return ttk.Button(p, text=text, command=cmd, **kw)
 def _ent(p, var, w=10, **kw): return ttk.Entry(p, textvariable=var, width=w, **kw)
 def _cb(p, var, vals, w=8):

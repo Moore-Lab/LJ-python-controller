@@ -36,8 +36,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-from .config import AinChannelConfig, LabjackT7Config
-from .device import LabJackT7Device
+from config import AinChannelConfig, LabjackT7Config
+from device import LabJackT7Device
 
 log = logging.getLogger(__name__)
 

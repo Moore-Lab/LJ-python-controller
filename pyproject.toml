@@ -16,5 +16,5 @@ xsphere = [
     "paho-mqtt>=1.6",
 ]
 
-[tool.setuptools.packages.find]
-include = ["labjack_t7*"]
+[tool.setuptools]
+py-modules = ["config", "device", "controller"]
