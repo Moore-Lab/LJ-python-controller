@@ -55,8 +55,7 @@ from tkinter import messagebox, scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
-    from device import LabJackT7Device
-    from config import LabjackT7Config, AinChannelConfig
+    from labjack_t7 import AinChannelConfig, LabjackT7Config, LabJackT7Device
     _HAS_PKG = True
 except ImportError:
     _HAS_PKG = False
