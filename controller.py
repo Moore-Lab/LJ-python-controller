@@ -275,6 +275,8 @@ class LabJackT7Controller(Controller):
                 payload["value_c"] = round(t_c, 3)
                 payload["value_k"] = round(t_c + _KELVIN, 3)
                 payload["reference_k"] = round(ref_c + _KELVIN, 3)
+                # Signed temperature gradient: this end minus the reference end.
+                payload["delta_c"] = round(t_c - ref_c, 3)
             self._mqtt.publish_sensor(
                 "temperature", "labjack", "tc", str(c.channel), payload=payload,
             )
