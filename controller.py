@@ -36,10 +36,13 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
+from . import thermometry as therm
 from .config import AinChannelConfig, LabjackT7Config
 from .device import LabJackT7Device
 
 log = logging.getLogger(__name__)
+
+_KELVIN = therm.KELVIN
 
 # ---------------------------------------------------------------------------
 # Compatibility shim — import from xsphere if available, else define stubs
@@ -90,8 +93,9 @@ class LabJackT7Controller(Controller):
         # Resolve plugin config: explicit arg > attribute on ServiceConfig > defaults
         if labjack_config is not None:
             self._lj_cfg = labjack_config
-        elif hasattr(config, "labjack") and config.labjack is not None:
-            self._lj_cfg = LabjackT7Config.from_dict(vars(config.labjack))
+        elif getattr(config, "labjack", None) is not None:
+            lj = config.labjack
+            self._lj_cfg = LabjackT7Config.from_dict(lj if isinstance(lj, dict) else vars(lj))
         else:
             self._lj_cfg = LabjackT7Config()
 
@@ -101,6 +105,15 @@ class LabJackT7Controller(Controller):
         self._thread: Optional[threading.Thread] = None
         self._last_read_utc: Optional[str] = None
         self._error: Optional[str] = None
+        # Latest PLC RTD temperatures (°C) keyed by "plc/rtd/<n>" — used as the
+        # reference for thermocouple gradiometer channels whose reference is a
+        # PLC RTD rather than a LabJack RTD.
+        self._plc_rtd_c: dict = {}
+        # Whether any TC channel references a PLC RTD (→ subscribe to those).
+        self._needs_plc_rtds = any(
+            ch.kind == "tc" and ch.reference.startswith("plc/rtd/")
+            for ch in self._lj_cfg.thermometry_channels
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -115,6 +128,9 @@ class LabJackT7Controller(Controller):
         self._mqtt.subscribe(command_topic(self.NAME, "write_dio"), self._on_write_dio)
         self._mqtt.subscribe(command_topic(self.NAME, "configure"), self._on_configure)
         self._mqtt.subscribe(command_topic(self.NAME, "reset"), self._on_reset)
+        if self._needs_plc_rtds:
+            self._mqtt.subscribe("xsphere/sensors/temperature/plc/rtd/+",
+                                 self._on_plc_rtd)
 
         self._thread = threading.Thread(
             target=self._poll_loop, name="labjack-t7-poll", daemon=True
@@ -189,6 +205,9 @@ class LabJackT7Controller(Controller):
                     payload={"value": temp_k, "unit": "K"},
                 )
 
+            if cfg.thermometry_channels:
+                self._poll_thermometry()
+
             with self._lock:
                 self._last_read_utc = datetime.now(timezone.utc).isoformat()
                 self._error = None
@@ -200,6 +219,80 @@ class LabJackT7Controller(Controller):
             self._device.disconnect()
 
         self._publish_status()
+
+    # ------------------------------------------------------------------
+    # Thermometry channels (RTDs via AIN_EF index 40, type-K TC gradiometers
+    # via AIN_EF index 22 re-referenced to an RTD)
+    # ------------------------------------------------------------------
+
+    def _poll_thermometry(self) -> None:
+        cfg = self._lj_cfg
+        rtd_chs = [c for c in cfg.thermometry_channels if c.kind == "rtd"]
+        tc_chs  = [c for c in cfg.thermometry_channels if c.kind == "tc"]
+
+        # One bulk read of all the EF registers we need.
+        names: list = []
+        for c in rtd_chs:
+            names += [f"AIN{c.ain}_EF_READ_A", f"AIN{c.ain}_EF_READ_B", f"AIN{c.ain}_EF_READ_C"]
+        for c in tc_chs:
+            names += [f"AIN{c.ain}_EF_READ_B", f"AIN{c.ain}_EF_READ_C"]
+        if not names:
+            return
+        vals = self._device.read_registers(names)
+        it = iter(vals)
+
+        rtd_temp_c: dict = {}   # channel name -> temperature in °C (for TC references)
+        for c in rtd_chs:
+            temp_k = next(it); res_ohm = next(it); volt_v = next(it)
+            temp_c = temp_k - _KELVIN
+            rtd_temp_c[c.name] = temp_c
+            self._mqtt.publish_sensor(
+                "temperature", "labjack", "rtd", str(c.channel),
+                payload={
+                    "value_k": round(temp_k, 3),
+                    "value_c": round(temp_c, 3),
+                    "resistance_ohm": round(res_ohm, 4),
+                    "voltage_v": round(volt_v, 7),
+                    "label": c.label,
+                },
+            )
+
+        for c in tc_chs:
+            emf_v = next(it); cjc_k = next(it)
+            ref_c = None
+            if c.reference in rtd_temp_c:
+                ref_c = rtd_temp_c[c.reference]
+            elif c.reference.startswith("plc/rtd/"):
+                ref_c = self._plc_rtd_c.get(c.reference)
+            payload = {
+                "emf_mv": round(emf_v * 1000.0, 5),
+                "cjc_k": round(cjc_k, 3),
+                "reference": c.reference,
+                "label": c.label,
+            }
+            if ref_c is not None:
+                t_c = therm.referenced_typek_temp_c(emf_v * 1000.0, ref_c)
+                payload["value_c"] = round(t_c, 3)
+                payload["value_k"] = round(t_c + _KELVIN, 3)
+                payload["reference_k"] = round(ref_c + _KELVIN, 3)
+            self._mqtt.publish_sensor(
+                "temperature", "labjack", "tc", str(c.channel), payload=payload,
+            )
+
+    def _on_plc_rtd(self, topic: str, payload) -> None:
+        """Cache a PLC RTD temperature (°C) for use as a thermocouple reference.
+        Topic: xsphere/sensors/temperature/plc/rtd/<n>  payload {"value_c": ...}"""
+        if not isinstance(payload, dict):
+            return
+        n = topic.rsplit("/", 1)[-1]
+        val = payload.get("value_c")
+        if val is None and payload.get("value_k") is not None:
+            val = float(payload["value_k"]) - _KELVIN
+        if val is not None:
+            try:
+                self._plc_rtd_c[f"plc/rtd/{n}"] = float(val)
+            except (TypeError, ValueError):
+                pass
 
     # ------------------------------------------------------------------
     # MQTT command handlers
