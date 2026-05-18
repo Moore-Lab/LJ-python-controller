@@ -21,6 +21,13 @@ _VALID_RANGES = {10.0, 1.0, 0.1, 0.01}
 # DAC channels supported by the T7
 _DAC_CHANNELS = {"DAC0", "DAC1"}
 
+# AIN_EF feature indices (T-series datasheet § Extended Features)
+_EF_INDEX_PT100 = 40   # 4-wire PT100, output in K on EF_READ_A
+_EF_INDEX_TYPEK = 22   # Type-K thermocouple, output in K on EF_READ_A
+# Modbus address of TEMPERATURE_DEVICE_K — used as the cold-junction source
+# for the type-K EF (datasheet § Thermocouples).
+_TEMPERATURE_DEVICE_K_ADDR = 60052
+
 
 class LabJackT7Device:
     """Low-level LJM wrapper for a LabJack T7."""
@@ -50,6 +57,11 @@ class LabJackT7Device:
         self._serial = str(int(_ljm.eReadName(self._handle, "SERIAL_NUMBER")))
         for ch_cfg in cfg.ain_channels:
             self._configure_ain(ch_cfg)
+        # AIN_EF (extended-feature) config lives in T7 RAM and is wiped by a
+        # power cycle. Re-apply it on every (re)connect so a freshly-rebooted
+        # T7 is self-healing — no need to run a separate setup script.
+        if cfg.thermometry_channels:
+            self._configure_thermometry(cfg.thermometry_channels)
         log.info("[labjack_t7] connected to T7 serial=%s", self._serial)
 
     def disconnect(self) -> None:
@@ -73,6 +85,41 @@ class LabJackT7Device:
         _ljm.eWriteName(self._handle, f"{n}_RANGE", ch.range_v)
         _ljm.eWriteName(self._handle, f"{n}_RESOLUTION_INDEX", float(ch.resolution_index))
         _ljm.eWriteName(self._handle, f"{n}_SETTLING_US", ch.settling_us)
+
+    def _configure_thermometry(self, channels) -> None:
+        """Apply AIN_EF configuration for the thermometry channels.
+
+        RTDs use EF index 40 (PT100, 4-wire, output in K, ±0.1 V range).
+        Type-K TCs use EF index 22 (output in K, ±0.01 V range), with
+        TEMPERATURE_DEVICE_K wired in as the cold-junction source.
+        """
+        names: list[str] = []
+        values: list[float] = []
+        for ch in channels:
+            ain = int(ch.ain)
+            kind = str(ch.kind).lower()
+            p = f"AIN{ain}"
+            if kind == "rtd":
+                names += [f"{p}_NEGATIVE_CH", f"{p}_RANGE",
+                          f"{p}_RESOLUTION_INDEX", f"{p}_EF_INDEX",
+                          f"{p}_EF_CONFIG_A"]
+                values += [float(ain + 1), 0.1, 0.0,
+                           float(_EF_INDEX_PT100), 0.0]
+            elif kind == "tc":
+                names += [f"{p}_NEGATIVE_CH", f"{p}_RANGE",
+                          f"{p}_RESOLUTION_INDEX", f"{p}_EF_INDEX",
+                          f"{p}_EF_CONFIG_A", f"{p}_EF_CONFIG_B",
+                          f"{p}_EF_CONFIG_D", f"{p}_EF_CONFIG_E"]
+                values += [float(ain + 1), 0.01, 0.0,
+                           float(_EF_INDEX_TYPEK), 0.0,
+                           float(_TEMPERATURE_DEVICE_K_ADDR), 1.0, 0.0]
+            else:
+                log.warning("[labjack_t7] unknown thermometry kind %r for %s",
+                            kind, ch.name)
+        if names:
+            _ljm.eWriteNames(self._handle, len(names), names, values)
+            log.info("[labjack_t7] applied AIN_EF config to %d channel(s)",
+                     len(channels))
 
     # ------------------------------------------------------------------
     # Reads
